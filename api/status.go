@@ -19,10 +19,10 @@ func NewStatusAPI(client *client.Client) *StatusAPI {
 }
 
 func (s *StatusAPI) FullStatus(patterns []string) (*params.FullStatus, error) {
-	root, err := s.client.NewAPIRoot()
+	root, err := s.client.NewModelAPIRoot("")
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	return root.Client().Status(nil)
+	return root.Client().Status(patterns)
 }

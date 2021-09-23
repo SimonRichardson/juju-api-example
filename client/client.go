@@ -9,11 +9,13 @@ import (
 
 	"github.com/go-macaroon-bakery/macaroon-bakery/v3/httpbakery"
 	"github.com/juju/errors"
-	"github.com/juju/names"
+	"github.com/juju/names/v4"
 	"golang.org/x/crypto/ssh/terminal"
 
 	"github.com/juju/juju/api"
 	"github.com/juju/juju/api/authentication"
+	"github.com/juju/juju/api/base"
+	"github.com/juju/juju/api/modelmanager"
 	"github.com/juju/juju/apiserver/params"
 	"github.com/juju/juju/cmd/modelcmd"
 	"github.com/juju/juju/core/network"
@@ -52,7 +54,34 @@ func NewClient() (*Client, error) {
 	}, nil
 }
 
+func (c *Client) AccountDetails() (*jujuclient.AccountDetails, error) {
+	return c.store.AccountDetails(c.controllerName)
+}
+
 func (c *Client) NewAPIRoot() (api.Connection, error) {
+	return c.newAPIRoot("")
+}
+
+func (c *Client) NewModelAPIRoot(modelName string) (api.Connection, error) {
+	if modelName == "" {
+		modelName = c.modelName
+	}
+
+	_, err := c.store.ModelByName(c.controllerName, modelName)
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return nil, errors.Trace(err)
+		}
+		// The model isn't known locally, so query the models
+		// available in the controller, and cache them locally.
+		if err := c.refreshModels(); err != nil {
+			return nil, errors.Annotate(err, "refreshing models")
+		}
+	}
+	return c.newAPIRoot(modelName)
+}
+
+func (c *Client) newAPIRoot(modelName string) (api.Connection, error) {
 	accountDetails, err := c.store.AccountDetails(c.controllerName)
 	if err != nil && !errors.IsNotFound(err) {
 		return nil, errors.Trace(err)
@@ -80,23 +109,61 @@ func (c *Client) NewAPIRoot() (api.Connection, error) {
 	}
 
 	param, err := c.newAPIConnectionParams(
-		c.store, c.controllerName, c.modelName, accountDetails,
+		c.store, c.controllerName, modelName, accountDetails,
 	)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
 	conn, err := juju.NewAPIConnection(param)
-	if c.modelName != "" && params.ErrCode(err) == params.CodeModelNotFound {
-		return nil, c.missingModelError(c.store, c.controllerName, c.modelName)
+	if modelName != "" && params.ErrCode(err) == params.CodeModelNotFound {
+		return nil, c.missingModelError(c.store, c.controllerName, modelName)
 	}
 	if redirectErr, ok := errors.Cause(err).(*api.RedirectError); ok {
-		return nil, c.newModelMigratedError(c.store, c.modelName, redirectErr)
+		return nil, c.newModelMigratedError(c.store, modelName, redirectErr)
 	}
 	if juju.IsNoAddressesError(err) {
 		return nil, errors.New("no controller API addresses; is bootstrap still in progress?")
 	}
 	return conn, errors.Trace(err)
+}
+
+func (c *Client) refreshModels() error {
+	root, err := c.NewAPIRoot()
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	modelManager := modelmanager.NewClient(root)
+	defer func() { _ = modelManager.Close() }()
+
+	accountDetails, err := c.store.AccountDetails(c.controllerName)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	models, err := modelManager.ListModels(accountDetails.User)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if err := c.storeModels(c.controllerName, models); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
+}
+
+func (c *Client) storeModels(controllerName string, models []base.UserModel) error {
+	modelsToStore := make(map[string]jujuclient.ModelDetails, len(models))
+	for _, model := range models {
+		modelDetails := jujuclient.ModelDetails{ModelUUID: model.UUID, ModelType: model.Type}
+		owner := names.NewUserTag(model.Owner)
+		modelName := jujuclient.JoinOwnerModelName(owner, model.Name)
+		modelsToStore[modelName] = modelDetails
+	}
+	if err := c.store.SetModels(controllerName, modelsToStore); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
 }
 
 // NewAPIConnectionParams returns a juju.NewAPIConnectionParams with the
