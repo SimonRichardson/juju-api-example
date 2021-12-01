@@ -39,6 +39,7 @@ type DeployArgs struct {
 	WorkloadSeries  set.Strings
 	Constraints     constraints.Value
 	ImageStream     string
+	Force           bool
 }
 
 func (s *ApplicationsAPI) Deploy(modelName string, charmName string, args DeployArgs) error {
@@ -179,9 +180,14 @@ func (s *ApplicationsAPI) prepareAndDeploy(ctx deployContext, charmURL *charm.UR
 	}
 
 	origin = selected.Origin.WithSeries(series)
-	charmURL = charmURL.WithRevision(*origin.Revision).WithArchitecture(origin.Architecture)
+	if charm.CharmHub.Matches(charmURL.Schema) {
+		charmURL = selected.URL.WithRevision(*origin.Revision).WithArchitecture(origin.Architecture).WithSeries(series)
+	} else if charm.CharmStore.Matches(charmURL.Schema) {
+		charmURL = selected.URL
+		origin.Revision = &charmURL.Revision
+	}
 
-	resultOrigin, err := ctx.CharmAPIClient.AddCharm(charmURL, origin, false)
+	resultOrigin, err := ctx.CharmAPIClient.AddCharm(charmURL, origin, requestedArgs.Force)
 	if err != nil {
 		return errors.Trace(err)
 	}
