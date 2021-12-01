@@ -32,9 +32,10 @@ func main() {
 
 	applicationsAPI := api.NewApplicationsAPI(client)
 	if err := applicationsAPI.Deploy("default", "ubuntu", api.DeployArgs{
-		Channel: charm.MakePermissiveChannel("latest", "stable", ""),
+		Channel:  charm.MakePermissiveChannel("latest", "stable", ""),
+		Revision: -1,
 	}); err != nil {
-		log.Fatal(err)
+		log.Fatalf("%+v\n", err)
 	}
 }
 
