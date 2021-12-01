@@ -1,8 +1,6 @@
 package api
 
 import (
-	"fmt"
-
 	"github.com/SimonRichardson/juju-api-example/client"
 	"github.com/SimonRichardson/juju-api-example/common"
 	"github.com/juju/charm/v8"
@@ -34,6 +32,7 @@ func NewApplicationsAPI(client *client.Client) *ApplicationsAPI {
 
 type DeployArgs struct {
 	ApplicationName string
+	NumUnits        int
 	Channel         charm.Channel
 	Revision        int
 	Series          string
@@ -43,11 +42,10 @@ type DeployArgs struct {
 }
 
 func (s *ApplicationsAPI) Deploy(modelName string, charmName string, args DeployArgs) error {
-	applicationName := charmName
-	if args.ApplicationName != "" {
-		applicationName = args.ApplicationName
+	if args.ApplicationName == "" {
+		args.ApplicationName = charmName
 	}
-	if err := names.ValidateApplicationName(applicationName); err != nil {
+	if err := names.ValidateApplicationName(args.ApplicationName); err != nil {
 		return errors.Trace(err)
 	}
 
@@ -188,9 +186,17 @@ func (s *ApplicationsAPI) prepareAndDeploy(ctx deployContext, charmURL *charm.UR
 		return errors.Trace(err)
 	}
 
-	fmt.Println(resultOrigin)
-
-	return nil
+	deployArgs := application.DeployArgs{
+		CharmID: application.CharmID{
+			URL:    charmURL,
+			Origin: resultOrigin,
+		},
+		ApplicationName: requestedArgs.ApplicationName,
+		Series:          resultOrigin.Series,
+		NumUnits:        requestedArgs.NumUnits,
+		Cons:            requestedArgs.Constraints,
+	}
+	return ctx.ApplicationAPIClient.Deploy(deployArgs)
 }
 
 func resolveCharmURL(path string, defaultSchema charm.Schema) (*charm.URL, error) {
